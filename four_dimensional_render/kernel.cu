@@ -344,7 +344,7 @@ __global__ void calculate_triangle(Triangle* t, unsigned int size, SceneData sce
 }
 
 //template<typename T>
-__device__ void gather_non_empty(bool is_full, RayPoint* data1, RayPoint* data2, RayPoint* results, int unsigned* res_size, unsigned int maksimal_size)
+__device__ void gather_non_empty(bool is_full, RayPoint* data, RayPoint* results, int unsigned* res_size, unsigned int maksimal_size)
 {
 	unsigned int i = threadIdx.x;
 	__shared__ unsigned int positions[BlockSize1];
@@ -359,12 +359,9 @@ __device__ void gather_non_empty(bool is_full, RayPoint* data1, RayPoint* data2,
 		__syncthreads();
 	}
 	if (is_full)
-	{
-		results[2 * positions[i] - 2] = *data1;
-		results[2 * positions[i] - 1] = *data2;
-	}
+		results[positions[i] - 1] = *data;
 	if (i == 0)
-		*res_size += 2 * positions[BlockSize1 - 1];
+		*res_size += positions[BlockSize1 - 1];
 	
 	__syncthreads();
 }
@@ -382,52 +379,39 @@ __global__ void calculate_pixel(TriangleTmpData* t, int unsigned data_size, ucha
 		size = 0;
 	}
 	__syncthreads();
-	for (int pos = 0; pos < (data_size - 1)/(BlockSize1*4) + 1; pos++) 
+	for (int pos = 0; pos < (data_size - 1)/(BlockSize1) + 1; pos++) 
 	{
 		RayPoint a{ 0.0f, 0.0f, 0.0f };
-		RayPoint b{ 0.0f, 0.0f, 0.0f };
 		bool is_intersected = false;
-		for (int m = 0; m < 4; m++)
+		int k = pos * BlockSize1 + i;
+		if (k < data_size)
 		{
-			int k = pos * BlockSize1 * 4 + i*4 + m;
-			if (k < data_size)
-			{
-				if (t[k].x_min <= x && x <= t[k].x_max &&
-					t[k].y_min <= y && y <= t[k].y_max) {
-					float denominator = (t[k].b_x * x + t[k].b_y *y + t[k].b_0);
-					float p_u = (t[k].a_x.cord[0] * x + t[k].a_y.cord[0] * y + t[k].a_0.cord[0]) / denominator;
-					if (0 < p_u)
+			if (t[k].x_min <= x && x <= t[k].x_max &&
+				t[k].y_min <= y && y <= t[k].y_max) {
+				float denominator = (t[k].b_x * x + t[k].b_y *y + t[k].b_0);
+				float p_u = (t[k].a_x.cord[0] * x + t[k].a_y.cord[0] * y + t[k].a_0.cord[0]) / denominator;
+				if (0 < p_u)
+				{
+					float p_v = (t[k].a_x.cord[1] * x + t[k].a_y.cord[1] * y + t[k].a_0.cord[1]) / denominator;
+					if (0 < p_v && p_u + p_v < 1)
 					{
-						float p_v = (t[k].a_x.cord[1] * x + t[k].a_y.cord[1] * y + t[k].a_0.cord[1]) / denominator;
-						if (0 < p_v && p_u + p_v < 1)
-						{
-							float p_x = (t[k].a_x.cord[2] * x + t[k].a_y.cord[2] * y + t[k].a_0.cord[2]) / denominator;
-							float p_y = (t[k].a_x.cord[3] * x + t[k].a_y.cord[3] * y + t[k].a_0.cord[3]) / denominator;
-							float width = 0.02;
-							bool is_visible = ((t[k].visibility & 0b10) && p_u < width) ||
-								((t[k].visibility & 0b1) && p_v < width) ||
-								((t[k].visibility & 0b100) && p_u + p_v > 1 - width);
-							if (!is_intersected) // if is set to false, than it has to be the first intersection.
-							{
-								a.x = p_x;
-								a.y = p_y;
-								a.visibility = is_visible ? 1.0 : 0.0;
-							}
-							else
-							{
-								b.x = p_x;
-								b.y = p_y;
-								b.visibility = is_visible ? 1.0 : 0.0;
-							}
-							is_intersected = true;
-							
-						}
+						float p_x = (t[k].a_x.cord[2] * x + t[k].a_y.cord[2] * y + t[k].a_0.cord[2]) / denominator;
+						float p_y = (t[k].a_x.cord[3] * x + t[k].a_y.cord[3] * y + t[k].a_0.cord[3]) / denominator;
+						float width = 0.02;
+						bool is_visible = ((t[k].visibility & 0b10) && p_u < width) ||
+							((t[k].visibility & 0b1) && p_v < width) ||
+							((t[k].visibility & 0b100) && p_u + p_v > 1 - width);
+						a.x = p_x;
+						a.y = p_y;
+						a.visibility = is_visible ? 1.0 : 0.0;
+						is_intersected = true;
+
 					}
 				}
 			}
 		}
 		__syncthreads();
-		gather_non_empty(is_intersected, &a, &b, &intersections[size], &size, data_size);
+		gather_non_empty(is_intersected, &a, &intersections[size], &size, data_size);
 	}
 	__syncthreads();
 	if (size != 0)
