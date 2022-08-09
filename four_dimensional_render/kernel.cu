@@ -338,7 +338,12 @@ __global__ void calculate_triangle(Triangle* t, unsigned int size, SceneData sce
 		y_min = py < y_min ? py : y_min;
 		y_max = py > y_max ? py : y_max;
 
-		result[i] = TriangleTmpData{ a_x, a_y, a_0, b_x, b_y, b_0, t[i].visibility_flags, x_min, x_max, y_min, y_max };
+		unsigned int x_min_int = x_min <= 0.0f ? 0 : (unsigned int)(x_min);
+		unsigned int y_min_int = y_min <= 0.0f ? 0 : (unsigned int)(y_min);
+		unsigned int x_max_int = x_max <= 0.0f ? 0 : (unsigned int)(x_max) + 1;
+		unsigned int y_max_int = y_max <= 0.0f ? 0 : (unsigned int)(y_max) + 1;
+		result[i] = TriangleTmpData{ a_x, a_y, a_0, b_x, b_y, b_0, t[i].visibility_flags,
+			x_min_int, x_max_int, y_min_int, y_max_int };
 
 	}
 }

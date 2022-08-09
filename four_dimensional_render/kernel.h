@@ -92,10 +92,10 @@ struct TriangleTmpData
 	float b_y;
 	float b_0;
 	char visibility;
-	float x_min;
-	float x_max;
-	float y_min;
-	float y_max;
+	unsigned int x_min;
+	unsigned int x_max;
+	unsigned int y_min;
+	unsigned int y_max;
 };
 
 extern "C" void CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int width, int height, uchar4* dst);
