@@ -259,5 +259,3 @@ paket-files/
 # Python Tools for Visual Studio (PTVS)
 __pycache__/
 *.pyc
-/four_dimensional_render/freeglut.lib
-/four_dimensional_render/glew64.lib
