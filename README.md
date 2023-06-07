@@ -3,6 +3,7 @@ experimental real time rendered of four dimensional objects written in c++ with 
 
 # How 4D is displayed
 The 4D object is projected onto a 3D spaces and then its projected onto the screen. So there are two cameras one in 4D and one in 3D. The key feature is that the projection onto 3D space correctly calculates occlusions. (The object lower in 4th dimension can occlude object placed higher). The 3D "faces" of 4D object are rendered in the following way: their edges are solid and colored according to distance from the screen; their 2D faces are transparent and tinted white. The effect looks something like this for a hupercube.
+
 https://github.com/marcin7Cd/four-dimensional-render/assets/34893204/fe4db312-9700-4d41-ad18-e73b5df6b96b
 
 # How to compile it
