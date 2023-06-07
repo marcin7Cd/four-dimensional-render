@@ -4,7 +4,10 @@ experimental real time rendered of four dimensional objects written in c++ with 
 # How 4D is displayed
 The 4D object is projected onto a 3D spaces and then its projected onto the screen. So there are two cameras one in 4D and one in 3D. The key feature is that the projection onto 3D space correctly calculates occlusions. (The object lower in 4th dimension can occlude object placed higher). The 3D "faces" of 4D object are rendered in the following way: their edges are solid and colored according to distance from the screen; their 2D faces are transparent and tinted white. The effect looks something like this for a hupercube.
 
-https://github.com/marcin7Cd/four-dimensional-render/assets/34893204/fe4db312-9700-4d41-ad18-e73b5df6b96b
+
+
+https://github.com/marcin7Cd/four-dimensional-render/assets/34893204/0139fd30-5b0c-4aa4-ac35-3f85b98d26fe
+
 
 # How to compile it
 Ideally, you would just compile & run it with Visual Studio 2017. You would need cuda and openGL installed to run it. But I haven't tested it or written it for different machines and systems, so you need to figure out how to run it on your own. I used Windows 10  (64-bit) with GeForce GTX 1050 graphics card and I had cuda 10.1 installed. 
