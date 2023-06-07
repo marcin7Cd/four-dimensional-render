@@ -1,5 +1,6 @@
 
 
+#include <windows.h>
 #include <helper_gl.h>
 #include <Gl/wglew.h>
 #include <GL/freeglut.h>
@@ -12,9 +13,11 @@
 #include <math.h>
 #include <stdio.h>
 #include <vector>
+#include <map>
 #include "kernel.h"
 #include <algorithm>
 #include <iterator>
+#include <fstream>
 
 
 struct Point5D {
@@ -85,6 +88,53 @@ struct TetraLabel {
 	char visibility;
 };
 
+struct TriangleLabel
+{
+	int a, b, c;
+	char visibility;
+};
+
+const bool operator< (const TriangleLabel left, const TriangleLabel right)
+{
+	if (left.a != right.a)
+		return left.a < right.a;
+	if (left.b != right.b)
+		return left.b < right.b;
+	return left.c < right.c;
+}
+
+struct TrianglePart
+{
+	TriangleLabel triangle;
+	int left_cell;
+	int right_cell;
+};
+
+struct HyperShape2
+{
+	std::vector<Point5D> points;
+	std::vector<TrianglePart> triangles;
+
+	std::vector<TriangleFull> generate_triangles()
+	{
+		std::vector<TriangleFull> res{};
+		for (auto t : triangles)
+		{
+			res.push_back({ {points[t.triangle.a].to4D(), 
+				             points[t.triangle.b].to4D(), 
+				             points[t.triangle.c].to4D()}, 
+				            t.triangle.visibility, t.left_cell, t.right_cell });
+		}
+		return res;
+	}
+};
+
+uchar4 generate_color(unsigned char val)
+{
+	//return uchar4{ (val % 3) * (255u / 3), ((val / 3) % 3) * (255u / 3), (val % 5) * (255u / 5) };
+	return uchar4{ ((val/2)%2) *(255u),0,255,0 };
+}
+
 struct HyperShape {
 	std::vector<Point5D> points;
 	std::vector<TetraLabel> tetrahedron_connections;
@@ -99,9 +149,17 @@ struct HyperShape {
 		std::vector<Tetrahedron> res{};
 		for (auto conn : tetrahedron_connections)
 		{
-			res.push_back(Tetrahedron{ {points[conn.pos[0]].to4D(), points[conn.pos[1]].to4D(),
-									  points[conn.pos[2]].to4D(), points[conn.pos[3]].to4D() },
-									 conn.visibility });
+			int a = conn.pos[0], b = conn.pos[1], c = conn.pos[2], d = conn.pos[3];
+			res.push_back(Tetrahedron{{points[a].to4D(), points[b].to4D(),
+									   points[c].to4D(), points[d].to4D() },
+									   conn.visibility, 
+				                      {generate_color((c + d)%256),
+									   generate_color((b + d)%256),
+									   generate_color((b + c)%256),
+									   generate_color((a + d)%256),
+									   generate_color((a + c)%256),
+									   generate_color((a + b)%256)
+									   } });
 		}
 		return res;
 	}
@@ -172,6 +230,8 @@ int imageW = 400;
 int imageH = 400;
 
 StopWatchInterface *hTimer = NULL;
+StopWatchInterface *globalTimer = NULL;
+
 
 #define REFRESH_DELAY     10
 
@@ -183,6 +243,7 @@ void setVsync(int interval)
 {
 	if (WGL_EXT_swap_control)
 	{
+		printf("sync cotntrol\n\n\n");
 		wglSwapIntervalEXT = (PFNWGLSWAPINTERVALFARPROC)wglGetProcAddress("wglSwapIntervalEXT");
 		wglSwapIntervalEXT(interval);
 	}
@@ -279,13 +340,13 @@ void initOpenGLBuffers(int w, int h)
 void renderImage();
 
 float frame_time = 1.0;
-
+float prev_time = 0.0;
+float cur_time = 0.0;
 void displayFunc(void)
 {
 	sdkStartTimer(&hTimer);
 	renderImage();
-	float start_t = sdkGetTimerValue(&hTimer);
-
+	
 	glBindTexture(GL_TEXTURE_2D, gl_Tex);
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, imageW, imageH, GL_RGBA, GL_UNSIGNED_BYTE, BUFFER_DATA(0));
 
@@ -306,7 +367,12 @@ void displayFunc(void)
 
 	glBindTexture(GL_TEXTURE_2D, 0);
 	glDisable(GL_FRAGMENT_PROGRAM_ARB);
-	frame_time = (sdkGetTimerValue(&hTimer) - start_t);
+	prev_time = cur_time;
+	cur_time = sdkGetTimerValue(&globalTimer);
+	frame_time = (cur_time - prev_time)/1000.0f;
+	//int diff = cur_time - prev_time;
+	//int time_per_frame = 1000 / 50;
+	//Sleep(diff > time_per_frame ? 0 : time_per_frame - diff);
 	sdkStopTimer(&hTimer);
 	glutSwapBuffers();
 
@@ -347,43 +413,122 @@ int pixelX = 100;
 int pixelY = 100;
 float angleXT = 0.0;
 float angleXY = 0.0;
+float angleXZ = 0.0;
+float angleYT = 0.0;
 float angleZT = 0.0;
-float speed = 10.0;
-void keyboardFunc(unsigned char k, int, int)
+float speed = 1.0;
+float move_time = 0.0;
+float last_positionX = 0.0;
+float last_positionY = 0.0;
+
+void motionFunc(int x, int y)
+{
+	last_positionX = (float(x) / float(imageW) - 0.5);
+	last_positionY = (float(y) / float(imageH) - 0.5);
+	//printf("(%.1f, %.1f)", last_positionX, last_positionY);
+}
+
+Matrix5x5 motion_trans = identity_matrix();
+
+void process_motion()
+{
+	float angleXY_dif = last_positionX * abs(last_positionX) * speed*frame_time * 5;
+	float angleYZ_dif = last_positionY * abs(last_positionY) * speed*frame_time * 5;
+	motion_trans = rotation_matrix(-angleYZ_dif, 0, 2) * rotation_matrix(angleXY_dif, 0, 1)  * motion_trans;
+}
+
+bool is_pressed_Q = false;
+bool is_pressed_A = false;
+bool is_pressed_W = false;
+bool is_pressed_S = false;
+bool is_pressed_E = false;
+bool is_pressed_D = false;
+
+struct Toggle_value
+{
+	bool value;
+	bool previous_input;
+	Toggle_value() {
+		value = false;
+		previous_input = false;
+	}
+	void input(bool is_key_pressed)
+	{
+		if (previous_input == false && is_key_pressed == true) {
+			value = !value;
+			if (value)
+				std::cout << "program paused\n";
+			else
+				std::cout << "program unpaused\n";
+		}
+		previous_input = is_key_pressed;
+	}
+};
+
+Toggle_value is_paused = Toggle_value();
+
+void updateKeyPresses(unsigned char k, bool val)
 {
 	switch (k)
 	{
-	case 'i':
-		pixelY -= 1;
-		break;
-	case 'k':
-		pixelY += 1;
-		break;
-	case 'j':
-		pixelX -= 1;
-		break;
-	case 'l':
-		pixelX += 1;
-		break;
 	case 'q':
-		angleXY += speed * frame_time;
+		is_pressed_Q = val;
 		break;
 	case 'a':
-		angleXY -= speed * frame_time;
+		is_pressed_A = val;
 		break;
 	case 'w':
-		angleXT += speed * frame_time;
+		is_pressed_W = val;
 		break;
 	case 's':
-		angleXT -= speed * frame_time;
+		is_pressed_S = val;
 		break;
 	case 'e':
-		angleZT += speed * frame_time;
+		is_pressed_E = val;
 		break;
 	case 'd':
-		angleZT -= speed * frame_time;
+		is_pressed_D = val;
 		break;
 	}
+	is_paused.input(k == 'p' && val);
+}
+
+void keyboardFunc(unsigned char k, int, int)
+{
+	updateKeyPresses(k, true);
+}
+
+void keyboardFuncUp(unsigned char k, int, int)
+{
+	updateKeyPresses(k, false);
+}
+
+Matrix5x5 key_trans = identity_matrix();
+
+void process_key_pressed()
+{
+	float angleYT_diff = 0.0;
+	float angleXT_diff = 0.0;
+	float angleZT_diff = 0.0;
+	if (move_time > 1.0/12) {
+	//if (frameCount % 5 == 0) {
+		if (is_pressed_Q)
+			angleYT_diff = speed * move_time;
+		if (is_pressed_A)
+			angleYT_diff = -speed * move_time;
+		if (is_pressed_W)
+			angleXT_diff = speed * move_time;
+		if (is_pressed_S)
+			angleXT_diff = -speed * move_time;
+		if (is_pressed_E)
+			angleZT_diff = speed * move_time;
+		if (is_pressed_D)
+			angleZT_diff = -speed * move_time;
+		key_trans = rotation_matrix(angleYT_diff, 1, 3) * rotation_matrix(angleXT_diff, 0, 3) * rotation_matrix(angleZT_diff, 2, 3) * key_trans;
+		move_time = 0.0f;
+	}
+	else
+		move_time += frame_time;
 }
 
 void initGL(int *argc, char **argv)
@@ -399,8 +544,9 @@ void initGL(int *argc, char **argv)
 
 	glutDisplayFunc(displayFunc);
 	glutKeyboardFunc(keyboardFunc);
+	glutKeyboardUpFunc(keyboardFuncUp);
 	//glutMouseFunc()
-	//glutMotionFunc()
+	glutMotionFunc(motionFunc);
 	//glutReshapeFunc()
 	glutReshapeFunc(reshapeFunc);
 	glutTimerFunc(REFRESH_DELAY, timerEvent, 0);
@@ -417,7 +563,9 @@ void cleanup()
 		h_Src = 0;
 	}
 	sdkStopTimer(&hTimer);
+	sdkStopTimer(&globalTimer);
 	sdkDeleteTimer(&hTimer);
+	sdkDeleteTimer(&globalTimer);
 	checkCudaErrors(cudaGraphicsUnregisterResource(cuda_pbo_resource));
 	glBindBuffer(GL_PIXEL_UNPACK_BUFFER_ARB, 0);
 
@@ -426,32 +574,11 @@ void cleanup()
 	glDeleteProgramsARB(1, &gl_Shader);
 }
 
-
-//cudaError_t CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int width, int height, uchar4* dst);
-float angle = 0.0;
-
-void renderImage()
-{
-	sdkResetTimer(&hTimer);
-	checkCudaErrors(cudaGraphicsMapResources(1, &cuda_pbo_resource, 0));
-	size_t num_bytes;
-	checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&d_dst, &num_bytes, cuda_pbo_resource));
-	float range = 1.0f;
-	//printf("%f", distX);
-	SceneData scene{ Point4D{-2.0f, -0.3f, -0.3f, 0.0f},
-	Point4D{0.125f, 0.125f, 0.125f, -10.0f},
-	Point4D{2.0f, -range / imageW / 2, -range / imageH / 2, 0.0f},
-	Point4D{0.0f, range / imageW, 0.0f, 0.0f},
-	Point4D{0.0f, 0.0f, range / imageH, 0.0f} };
-	float res = 0.0;
-
-	Point4D center = Point4D{ 0.25, 0.25, 0.25, 0.25 };
-	Matrix5x5 trans = translation(center) * rotation_matrix(angleZT, 2, 3) * rotation_matrix(angleXY, 0, 1) * rotation_matrix(angleXT, 0, 3) * translation((-1.0f) * center);
-
+HyperShape generate_hypercube() {
 	std::vector<Point5D> hypercube_points{};
 	for (int i = 0; i < 16; i++)
 	{
-		hypercube_points.push_back(trans * Point5D{0.5f * (i & 1), 0.5f * ((i & 2) != 0), 0.5f * ((i & 4) != 0), 0.5f * ((i & 8) != 0), 1.0});
+		hypercube_points.push_back(Point5D{ 0.5f * (i & 1), 0.5f * ((i & 2) != 0), 0.5f * ((i & 4) != 0), 0.5f * ((i & 8) != 0), 1.0 });
 	}
 	std::vector<TetraLabel> labels_cube{ {{0, 4, 2, 7}, 0b110000},
 										{{6, 4, 2, 7}, 0b111000},
@@ -476,56 +603,161 @@ void renderImage()
 			hypercube_labels.push_back(result);
 		}
 	}
-	HyperShape hyper_cube = HyperShape( hypercube_points, hypercube_labels);
-	std::vector<Tetrahedron> all_tetra = hyper_cube.get_tetrahedrons();
-	int num_of_tetra = all_tetra.size();
-	/*
-	int const num_of_tetra = 5;
-	Point5D simp5[5]{
-	{ 0.0f, 0.0f, 0.0f, 0.0f, 1.0f }
-	,{ 0.5f, 0.0f, 0.0f, 0.0f, 1.0f}
-	,{ 0.0f , 0.5f, 0.0f, 0.0f, 1.0f}
-	,{ 0.0f , 0.0f, 0.5f, 0.0f, 1.0f}
-	,{ 0.0f , 0.0f, 0.0f, 0.5f, 1.0f} };
+	return HyperShape(hypercube_points, hypercube_labels);
+}
 
-	Point4D simp[5];
-	for (int i = 0; i < num_of_tetra; i++)
+//cudaError_t CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int width, int height, uchar4* dst);
+float angle = 0.0;
+
+HyperShape2 final_shape{ {},{} };
+
+void renderImage()
+{
+	sdkResetTimer(&hTimer);
+	checkCudaErrors(cudaGraphicsMapResources(1, &cuda_pbo_resource, 0));
+	size_t num_bytes;
+	checkCudaErrors(cudaGraphicsResourceGetMappedPointer((void **)&d_dst, &num_bytes, cuda_pbo_resource));
+	float range = 1.0f;
+	//printf("%f", distX);
+	SceneData scene{ Point4D{-2.0f, 0.25f, 0.25f, 0.0f},
+	Point4D{0.125f, 0.125f, 0.125f, -10.0f},
+	Point4D{2.0f, 0.0f, 0.0f, 0.0f},
+	Point4D{0.0f, range / imageW, 0.0f, 0.0f},
+	Point4D{0.0f, 0.0f, range / imageH, 0.0f} };
+	float res = 0.0;
+	process_key_pressed();
+	process_motion();
+	if (!is_paused.value)
 	{
-		simp[i] = (trans * simp5[i]).to4D();
-	}
+		//angleXY += 1.1 * frame_time;
+		Point4D center = Point4D{ 0.25, 0.25, 0.25, 0.25 };
+		Matrix5x5 trans = translation(center) * motion_trans * key_trans * translation((-1.0f) * center);
 
-	Tetrahedron all_tetra[num_of_tetra]{
-	Tetrahedron{ simp[0], simp[1], simp[2], simp[3], 127 },
-	Tetrahedron{ simp[0], simp[1], simp[2], simp[4], 127 },
-	Tetrahedron{ simp[0], simp[1], simp[3], simp[4], 127 },
-	Tetrahedron{ simp[0], simp[2], simp[3], simp[4], 127 },
-	Tetrahedron{ simp[1], simp[2], simp[3], simp[4], 127 }
-	};
-	Triangle all_triangles[num_of_tetra * 4];*/
-	//printf("number of triangle %d\n", num_of_tetra);
-	Triangle all_triangles[100 * 4];
-	for (int i = 0; i < num_of_tetra; i++)
-	{
-		all_tetra[i].add_triangle_to_array(&all_triangles[4 * i]);
-	}
-	
+		HyperShape2 hyper_cube = final_shape;//generate_hypercube();
+		for (int i = 0; i < hyper_cube.points.size(); i++)
+		{
+			hyper_cube.points[i] = trans * hyper_cube.points[i];
+		}
 
-	//printf("(%d %d)", pixelX, pixelY);
-	CalculateImage(scene, all_triangles, num_of_tetra * 4, imageW, imageH, d_dst);
+		TriangleFull all_triangles[4 * 100];
+		int num_of_triangles = 0;
+		for (auto triangle : hyper_cube.generate_triangles())
+		{
+			all_triangles[num_of_triangles] = triangle;
+			num_of_triangles += 1;
+		}
+
+		//printf("(%d %d)", pixelX, pixelY);
+		CalculateImage(scene, all_triangles, num_of_triangles, imageW, imageH, d_dst);
+		
+	}
 	checkCudaErrors(cudaGraphicsUnmapResources(1, &cuda_pbo_resource, 0));
+}
+
+
+HyperShape2 load_shape_file(std::string filename)
+{
+	std::ifstream file;
+	file.open(filename);
+	printf("opening a file\n");
+	if (!file.is_open())
+	{
+		printf("reading a file failed");
+		return HyperShape2{ {},{} };
+	}
+	int num_of_points;
+	int num_of_cells;
+	file >> num_of_points >> num_of_cells;
+	//read points
+	std::vector<Point5D> points{};
+	for (int i = 0; i < num_of_points; i++)
+	{
+		float a, b, c, d;
+		file >> a >> b >> c >> d;
+		points.push_back(Point5D{ a,b,c,d,1.0 });
+	}
+	//read tetra connections
+	std::map<TriangleLabel, std::pair<int, int>> labels{};
+	
+	for (int i = 0; i < num_of_cells; i++)
+	{
+		int num_of_triangles;
+		file >> num_of_triangles;
+		for (int j = 0; j < num_of_triangles; j++)
+		{
+			int a, b, c;
+			file >> a >> b >> c;
+			char c1 = 32;
+			while (c1 != '0' && c1 != '1')
+				file >> c1;
+			char c2, c3;
+			file >> c2 >> c3;
+			char visibility = (c3 == '1') * 4 | (c2 == '1') * 2 | (c1 == '1');
+			TriangleLabel current_label = TriangleLabel{ a,b,c, visibility };
+			auto prev_pos = labels.find(current_label);
+
+			if (prev_pos == std::end(labels))
+				labels.insert({ current_label, { i, EMPTY_CELL } });
+			else
+			{
+				prev_pos->second.second = i;
+			}
+
+		}
+	}
+	std::vector<TrianglePart> triangles{};
+	for (auto v : labels)
+	{
+		//printf("[%d, %d, %d]", v.first.a, v.first.b, v.first.c);
+		triangles.push_back({ v.first, v.second.first, v.second.second });
+	}
+
+	file.close();
+	printf("file read\n");
+	return HyperShape2{ points, triangles };
+}
+
+void write_shape_file(HyperShape shape, std::string filename)
+{
+	std::ofstream file;
+	file.open(filename);
+	file << shape.points.size() << " " << shape.tetrahedron_connections.size() << "\n";
+	for (Point5D& p : shape.points)
+	{
+		file << p.cords[0] << " " << p.cords[1] << " " << p.cords[2] << " " << p.cords[3] << "\n";
+	}
+	file << "\n";
+	for (TetraLabel& conn : shape.tetrahedron_connections)
+	{
+		file << conn.pos[0] << " " << conn.pos[1] << " " << conn.pos[2] << " " << conn.pos[3] << " ";
+		int pos = 1;
+		for (int i = 0; i < 6; i++)
+		{
+			file << ((conn.visibility & pos) / pos);
+			pos = pos << 1;
+		}
+		file << "\n";
+	}
+	file.close();
 }
 
 int main(int argc, char **argv)
 {
 	//initData(argc, argv);
-
+	std::string file_name;
+	std::cout << "what file to load\n";
+	std::cin >> file_name;
+	//final_shape = load_shape_file("cell24");
+	final_shape = load_shape_file(file_name);
 	initGL(&argc, argv);
 	printf("after initGL \n");
 	initOpenGLBuffers(imageW, imageH);
 	glutCloseFunc(cleanup);
-	setVsync(0);
+	setVsync(1);
 	sdkCreateTimer(&hTimer);
+	sdkCreateTimer(&globalTimer);
 	sdkStartTimer(&hTimer);
+	sdkStartTimer(&globalTimer);
 	glutMainLoop();
 
 	/*if (cudaStatus != cudaSuccess) {

@@ -9,74 +9,6 @@
 #include "kernel.h"
 
 
-/*
-struct RayPoint{
-	float x;
-	float y;
-	float visibility;
-};
-
-struct PointData
-{
-	float x;
-	float y;
-	float slope;
-};
-
-struct Point4D
-{
-	float cord[4];
-
-};
-
-struct Triangle
-{
-	Point4D p[3];
-};
-
-struct Matrix4x4
-{
-	Point4D col[4];
-};
-
-struct Tetrahedron
-{
-	Point4D p[4];
-
-	void add_triangle_to_array(Triangle* array)
-	{
-		array[0] = Triangle{ p[0], p[1], p[2] };
-		array[1] = Triangle{ p[0], p[1], p[3] };
-		array[2] = Triangle{ p[0], p[2], p[3] };
-		array[3] = Triangle{ p[1], p[2], p[3] };
-	}
-};
-
-//Tetrahedron operator*(Matrix4x4 a, Tetrahedron b)
-//{
-//	return Tetrahedron{ a * b.p[0], a*b.p[1], a*b.p[2] , a*b.p[3] };
-//}
-
-
-struct SceneData
-{
-	Point4D origin;
-	Point4D focal_point;
-	Point4D direction;
-	Point4D directionX;
-	Point4D directionY;
-};
-
-struct TriangleTmpData
-{
-	Point4D a_x;
-	Point4D a_y;
-	Point4D a_0;
-	float b_x;
-	float b_y;
-	float b_0;
-};
-*/
 __device__ Point4D operator+ (Point4D a, Point4D b)
 {
 	return Point4D{ a.cord[0] + b.cord[0],
@@ -97,36 +29,12 @@ __device__ Point4D operator* (Point4D a, Point4D b)
 					a.cord[3] * b.cord[3] };
 }
 
-
-
-/*__host__ Point4D operator* (Matrix4x4 a, Point4D b)
+float calculate_norm(Point4D a)
 {
-	Point4D res{ 0.0, 0.0, 0.0, 0.0 };
-	for (int i = 0; i < 4; i++)
-	{
-		for (int j = 0; j < 4; j++)
-		{
-			res.cord[i] += a.col[i].cord[j] * b.cord[j];
-		}
-	}
-	return res;
+	return a.cord[0] * a.cord[0] + a.cord[1] * a.cord[1] + a.cord[2] * a.cord[2] + a.cord[3] * a.cord[3];
 }
 
-Point4D operator* (Matrix4x4 a, Point4D b)
-{
-	Point4D res{ 0.0, 0.0, 0.0, 0.0 };
-	for (int i = 0; i < 4; i++)
-	{
-		for (int j = 0; j < 4; j++)
-		{
-			res.cord[i] += a.col[i].cord[j] * b.cord[j];
-		}
-	}
-	return res;
-}*/
-
-
-#define BlockSize1 64
+#define BlockSize1 128
 
 // size has to be divisible by 2
 __device__ bool VisibleCalcSection(float p_slope, float p_x, float p_y, bool is_ignored, int from, int count, const RayPoint *a)
@@ -152,7 +60,16 @@ __device__ bool VisibleCalcSection(float p_slope, float p_x, float p_y, bool is_
 	bool is_blocked = false;
 	for (int j = 0; j < count; j += 2)
 	{
+		/*float eps = 0.05;
+		if (abs(points[j].x-p_x)< eps && abs(points[j].y - p_y) < eps)
+			continue;
+		if (abs(points[j+1].x - p_x) < eps && abs(points[j+1].y - p_y) < eps)
+			continue;/**/
+		
 		int k = points[j].slope < points[j ^ 1].slope ? j : j ^ 1;
+		//int k = points[j].slope < points[j ^ 1].slope ? j : j ^ 1;
+		//if (p_y*points[k].x < p_x *points[k].y && points[k ^ 1].y*p_x < points[k^1].x* p_y) //assumes that y cord is always positive
+		//float diff = points[k ^ 1].slope - points[k].slope;
 		if (points[k].slope < p_slope && p_slope < points[k ^ 1].slope) // the point is in the range of a segment
 		{
 			if ((points[k].x - points[k ^ 1].x) * (p_y - points[k].y) -
@@ -170,7 +87,7 @@ __device__ bool VisibleCalcSection(float p_slope, float p_x, float p_y, bool is_
 __device__ void VisibleKernel(uchar4 *c, const RayPoint *a, unsigned int size)
 {
 	int i = threadIdx.x;
-	__shared__ float real_vis[BlockSize1];
+	__shared__ float dist[BlockSize1];
 	__shared__ bool show_state;
 	if (i == 0) show_state = false;
 	float p_x = 0.0;
@@ -178,6 +95,8 @@ __device__ void VisibleKernel(uchar4 *c, const RayPoint *a, unsigned int size)
 	float p_slope = 0.0;
 	float p_vis = 0.0;
 	float final_vis = 0.0;
+	float final_dist = 1e10f;
+	uchar4 p_color{0,0,0,0};
 	bool is_blocked = false;
 	for (int k = 0; k < (size - 1) / BlockSize1 + 1; k++)
 	{
@@ -188,6 +107,7 @@ __device__ void VisibleKernel(uchar4 *c, const RayPoint *a, unsigned int size)
 			p_y = a[pos].y;
 			p_vis = a[pos].visibility;
 			p_slope = p_x / p_y;
+			p_color = a[pos].color;
 			if (p_x == 0.0) show_state = true;
 		}
 		else
@@ -208,23 +128,62 @@ __device__ void VisibleKernel(uchar4 *c, const RayPoint *a, unsigned int size)
 		is_blocked = VisibleCalcSection(p_slope, p_x, p_y, (pos >= size) || is_blocked, (num_loops - 1)*BlockSize1, size - (num_loops - 1)*BlockSize1, a);
 		
 		//real_vis[i] = p_vis;
-		real_vis[i] = is_blocked ? 0.0 : p_vis;
+		//if (i == 0)
+		//	printf("[%.1f]", p_slope*100.0);
+		dist[i] = (is_blocked || p_vis == 0.0) ? 1e10f : p_slope;//p_slope * 5.0f;
 		//if (pos < size) printf("position %d visibility %f is blocked %c \n", pos, p_vis, is_blocked ? 't' : 'f');
 		__syncthreads();
-		// calculate maximum 
+		// calculate minimum 
 		for (int range = 2; range < BlockSize1; range <<= 1)
 		{
 			if (i % range == 0)
 			{
-				real_vis[i] = real_vis[i] > real_vis[i + (range / 2)] ? real_vis[i] : real_vis[i + (range / 2)];
+				dist[i] = dist[i] < dist[i + (range / 2)] ? dist[i] : dist[i + (range / 2)];
 			}
 			__syncthreads();
 		}
-		if (i == 0)
-		{
-			float tmp = real_vis[0] > real_vis[BlockSize1 / 2] ? real_vis[0] : real_vis[BlockSize1 / 2];
-			final_vis = final_vis > tmp ? final_vis : tmp;
-		}
+		float tmp = dist[0] < dist[BlockSize1 / 2] ? dist[0] : dist[BlockSize1 / 2];
+		final_dist = final_dist < tmp ? final_dist : tmp;
+	}
+	__shared__ unsigned int num_of_barriers;
+	if (i == 0)
+		num_of_barriers = 0;
+	__syncthreads();
+	if (!is_blocked) {
+	//if (p_slope < final_dist && !is_blocked) {
+		atomicInc(&num_of_barriers, 200);
+	}/**/
+	__syncthreads();
+	float alpha = 1 - powf(0.9, num_of_barriers);
+	//float alpha = num_of_barriers;
+	unsigned char brightness = (int)(alpha*100);//(int)(5 * alpha);
+	if (i == 0)
+	{
+		
+		/*c->x = (int)(5*(alpha));
+		c->y = (int)(5*(alpha));
+		c->z = (int)(5*(alpha));
+		/**/
+		/*c->x = 0;
+		c->y = 0;
+		c->z = 0;/**/
+		c->x = brightness;
+		c->y = brightness;
+		c->z = brightness;
+	}
+	if (final_dist == p_slope) // WRONG when there is more points processed than threads.
+	{
+		//printf("[%f]", p_slope);
+		//*c = p_color;
+		//c->x = (255 - val)*alpha; +140 * (1 - alpha);
+		//c->y = (255-val)*alpha + 70*(1-alpha);
+		//c->z = val*alpha + (100)*(1-alpha);
+		/**/
+		float p_vis = ((p_slope - 0.8) * 2.0f);
+		unsigned char val = (p_vis > 1.0) ? 255 : (unsigned char)(p_vis * 255);
+		c->x = int((255 - val)*alpha);
+		c->y = int((255 - val)*alpha);
+		c->z = int((val)*alpha);/**/
 	}
 	if (i == 0)
 	{
@@ -233,13 +192,6 @@ __device__ void VisibleKernel(uchar4 *c, const RayPoint *a, unsigned int size)
 			c->x = 255;
 			c->y = 0;
 			c->z = 0;
-		}
-		else
-		{
-			char val = (final_vis > 0.5) ? 255 : 0;
-			c->x = val;
-			c->y = val;
-			c->z = val;
 		}
 	}
 	__syncthreads();
@@ -294,7 +246,7 @@ __device__ void calc_2_eq(float a_x, float a_y, float a_0,
 	*y = (a_x*b_0 - a_0 * b_x) / det;
 }
 
-__global__ void calculate_triangle(Triangle* t, unsigned int size, SceneData scene, TriangleTmpData *result)
+__global__ void calculate_triangle(TriangleFull* t, unsigned int size, SceneData scene, TriangleTmpData *result)
 {
 	int i = blockDim.x * blockIdx.x + threadIdx.x;
 	if (i < size)
@@ -315,7 +267,7 @@ __global__ void calculate_triangle(Triangle* t, unsigned int size, SceneData sce
 		Point4D a_y = cramer_dets(m, b);
 		a_y = a_y * Point4D{ 1,1,0,1 };
 		float b_y = determinant(m);
-		
+
 		float px, py, x_min, x_max, y_max, y_min;
 		calc_2_eq(a_x.cord[0], a_y.cord[0], -a_0.cord[0],
 			a_x.cord[1], a_y.cord[1], -a_0.cord[1], &px, &py); //u =0, v=0
@@ -338,17 +290,56 @@ __global__ void calculate_triangle(Triangle* t, unsigned int size, SceneData sce
 		y_min = py < y_min ? py : y_min;
 		y_max = py > y_max ? py : y_max;
 
-		unsigned int x_min_int = x_min <= 0.0f ? 0 : (unsigned int)(x_min);
-		unsigned int y_min_int = y_min <= 0.0f ? 0 : (unsigned int)(y_min);
-		unsigned int x_max_int = x_max <= 0.0f ? 0 : (unsigned int)(x_max) + 1;
-		unsigned int y_max_int = y_max <= 0.0f ? 0 : (unsigned int)(y_max) + 1;
-		result[i] = TriangleTmpData{ a_x, a_y, a_0, b_x, b_y, b_0, t[i].visibility_flags,
-			x_min_int, x_max_int, y_min_int, y_max_int };
+		// x_min_int = x_min <= 0.0f ? 0 : (unsigned int)(x_min);
+		//unsigned int y_min_int = y_min <= 0.0f ? 0 : (unsigned int)(y_min);
+		//unsigned int x_max_int = x_max <= 0.0f ? 0 : (unsigned int)(x_max) + 1;
+		//unsigned int y_max_int = y_max <= 0.0f ? 0 : (unsigned int)(y_max) + 1;
+		result[i] = TriangleTmpData{ a_x, a_y, a_0, b_x, b_y, b_0, t[i].first_cell, t[i].second_cell, t[i].visibility,
+			x_min, x_max, y_min, y_max };
 
 	}
 }
 
 //template<typename T>
+__device__ void gather_non_empty_v2(bool is_full, RayPoint* data, RayPoint* results, int unsigned* res_size, unsigned int maksimal_size)
+{
+	unsigned int i = threadIdx.x;
+	__shared__ unsigned int num_filled;
+	__shared__ unsigned int position[BlockSize1];
+	__shared__ unsigned int is_filled[BlockSize1];
+	position[i] = 0;
+	is_filled[i] = 0;
+	if (i == 0)
+		num_filled = 0;
+	__syncthreads();
+	bool is_second = false;
+	if (is_full)
+	{
+		unsigned int offset = atomicInc(&is_filled[i / 4], 2);
+		if (offset == 0)
+		{
+			unsigned int spot = atomicInc(&num_filled, BlockSize1);
+			results[spot * 2] = *data;
+			position[i / 4] = spot;
+		}
+		else
+		{
+			// I will copy after the sync so that postion array will be fully updated.
+			is_second = true;
+		}
+	}
+	__syncthreads();
+	if (is_second)
+	{
+		results[2 * position[i / 4] + 1] = *data;
+	}
+	if (i == 0)
+	{
+		*res_size += 2 * num_filled;
+	}
+	__syncthreads();
+}
+
 __device__ void gather_non_empty(bool is_full, RayPoint* data, RayPoint* results, int unsigned* res_size, unsigned int maksimal_size)
 {
 	unsigned int i = threadIdx.x;
@@ -359,7 +350,7 @@ __device__ void gather_non_empty(bool is_full, RayPoint* data, RayPoint* results
 	{
 		if ((i& pos) != 0)
 		{
-			positions[i] += positions[(i & ((BlockSize1-1) ^ (pos*2 - 1))) + pos-1];
+			positions[i] += positions[(i & ((BlockSize1 - 1) ^ (pos * 2 - 1))) + pos - 1];
 		}
 		__syncthreads();
 	}
@@ -367,79 +358,151 @@ __device__ void gather_non_empty(bool is_full, RayPoint* data, RayPoint* results
 		results[positions[i] - 1] = *data;
 	if (i == 0)
 		*res_size += positions[BlockSize1 - 1];
-	
 	__syncthreads();
 }
+#define LINE_LEN 400
 // triangle are put in the array in pairs of fours so that each 4 correspond to 1 tetrahedron 
-__global__ void calculate_pixel(TriangleTmpData* t, int unsigned data_size, uchar4* pixels, int width)
+__global__ void calculate_pixel(TriangleTmpData* t, int unsigned data_size, uchar4* pixels, int width, int height,
+	float dir_norm, float dirX_norm, float dirY_norm)
 {
 	unsigned int i = threadIdx.x;
-	int x = blockIdx.x;
-	int y = blockIdx.y;
-	__shared__ RayPoint intersections[2*BlockSize1];
+	__shared__ RayPoint intersections[BlockSize1];
+	__shared__ unsigned int cell_intersection_count[BlockSize1];
+	__shared__ unsigned int cell_pos[BlockSize1];
 	__shared__ unsigned int size;
-	__shared__ unsigned int last_i;
-	if (i == 0)
-	{
-		size = 0;
-	}
 	__syncthreads();
-	for (int pos = 0; pos < (data_size - 1)/(BlockSize1) + 1; pos++) 
+	TriangleTmpData tk[10];
+	int y_im = blockIdx.y;
+	int x_im = blockIdx.x * LINE_LEN;
+	float y = y_im - height / 2;
+	float x = x_im - width / 2;
+	for (int pos = 0; pos < (data_size - 1) / (BlockSize1)+1; pos++)
 	{
-		RayPoint a{ 0.0f, 0.0f, 0.0f };
-		bool is_intersected = false;
 		int k = pos * BlockSize1 + i;
 		if (k < data_size)
 		{
-			if (t[k].x_min <= x && x <= t[k].x_max &&
-				t[k].y_min <= y && y <= t[k].y_max) {
-				float denominator = (t[k].b_x * x + t[k].b_y *y + t[k].b_0);
-				float p_u = (t[k].a_x.cord[0] * x + t[k].a_y.cord[0] * y + t[k].a_0.cord[0]) / denominator;
-				if (0 < p_u)
-				{
-					float p_v = (t[k].a_x.cord[1] * x + t[k].a_y.cord[1] * y + t[k].a_0.cord[1]) / denominator;
-					if (0 < p_v && p_u + p_v < 1)
+			tk[pos] = t[k];
+		}
+	}
+	for (int r = 0; r < LINE_LEN; r++)
+	{
+		cell_pos[i] = 0;
+		cell_intersection_count[i] = 0;
+		if (i == 0)
+		{
+			size = 0;
+		}
+		__syncthreads();
+		x_im = blockIdx.x * LINE_LEN + r;
+		x = x_im - (width / 2);
+		for (int pos = 0; pos < (data_size - 1) / (BlockSize1)+1; pos++)
+		{
+			RayPoint a{ 0.0f, 0.0f, 0.0f };
+			bool is_intersected = false;
+			int k = pos * BlockSize1 + i;
+			if (k < data_size)
+			{
+				if (tk[pos].y_min <= y && y <= tk[pos].y_max &&
+					tk[pos].x_min <= x && x <= tk[pos].x_max) {
+					float denominator = (tk[pos].b_x * x + tk[pos].b_y *y + tk[pos].b_0);
+					float p_u = (tk[pos].a_x.cord[0] * x + tk[pos].a_y.cord[0] * y + tk[pos].a_0.cord[0]) / denominator;
+					if (0 < p_u)
 					{
-						float p_x = (t[k].a_x.cord[2] * x + t[k].a_y.cord[2] * y + t[k].a_0.cord[2]) / denominator;
-						float p_y = (t[k].a_x.cord[3] * x + t[k].a_y.cord[3] * y + t[k].a_0.cord[3]) / denominator;
-						float width = 0.02;
-						bool is_visible = ((t[k].visibility & 0b10) && p_u < width) ||
-							((t[k].visibility & 0b1) && p_v < width) ||
-							((t[k].visibility & 0b100) && p_u + p_v > 1 - width);
-						a.x = p_x;
-						a.y = p_y;
-						a.visibility = is_visible ? 1.0 : 0.0;
-						is_intersected = true;
-
+						float p_v = (tk[pos].a_x.cord[1] * x + tk[pos].a_y.cord[1] * y + tk[pos].a_0.cord[1]) / denominator;
+						if (0 < p_v && p_u + p_v < 1)
+						{
+							float p_x = (tk[pos].a_x.cord[2] * x + tk[pos].a_y.cord[2] * y + tk[pos].a_0.cord[2]) / denominator;
+							//p_x = p_x / sqrt(dirX_norm*x*x + dirY_norm * y*y + dir_norm); //normalize
+							float p_y = (tk[pos].a_x.cord[3] * x + tk[pos].a_y.cord[3] * y + tk[pos].a_0.cord[3]) / denominator;
+							float width = 0.02;
+							bool is_visible = ((tk[pos].visibility & 0b10) && p_u < width) ||
+								((tk[pos].visibility & 0b1) && p_v < width) ||
+								((tk[pos].visibility & 0b100) && p_u + p_v > 1 - width);
+							int scale = 10000;
+							a.x = float(int(p_x*scale))/ scale; //discreate
+							a.y = float(int(p_y*scale))/ scale;
+							a.visibility = is_visible ? 1.0 : 0.0;
+							//a.visibility = 1.0;
+							is_intersected = true;
+							/*if ((tk[pos].visibility & 0b1) && p_v < width)
+								a.color = t[pos].edge_colors[0];
+							if ((tk[pos].visibility & 0b10) && p_u < width)
+								a.color = t[pos].edge_colors[1];
+							if ((tk[pos].visibility & 0b100) && p_u + p_v > 1 - width)
+								a.color = t[pos].edge_colors[2];*/
+						}
 					}
 				}
 			}
+			__syncthreads();
+			bool is_second_l = false;
+			bool is_second_r = false;
+			if (is_intersected)
+			{
+				//if (tk[pos].left_cell == -1 || tk[pos].right_cell == -1)
+				//	printf("WRONG");
+				unsigned int occupied = atomicInc(&cell_intersection_count[tk[pos].left_cell], BlockSize1);
+				if (occupied == 0)
+				{
+					int spot = atomicInc(&size, BlockSize1);
+					cell_pos[tk[pos].left_cell] = spot;
+					intersections[spot * 2] = a;
+				}
+				else
+					is_second_l = true;
+
+				if (tk[pos].right_cell != EMPTY_CELL)
+				{
+					unsigned int occupied = atomicInc(&cell_intersection_count[tk[pos].right_cell], BlockSize1);
+					if (occupied == 0)
+					{
+						int spot = atomicInc(&size, BlockSize1);
+						cell_pos[tk[pos].right_cell] = spot;
+						intersections[spot * 2] = a;
+					}
+					else
+						is_second_r = true;
+					//if (occupied > 1)
+					//	printf("[%d]", occupied);
+				}
+			}
+			__syncthreads();
+			if (is_second_l)
+				intersections[2 * cell_pos[tk[pos].left_cell] + 1] = a;
+			if (is_second_r)
+				intersections[2 * cell_pos[tk[pos].right_cell] + 1] = a;
+			//gather_non_empty_v2(is_intersected, &a, &intersections[size], &size, data_size);
 		}
 		__syncthreads();
-		gather_non_empty(is_intersected, &a, &intersections[size], &size, data_size);
-	}
-	__syncthreads();
-	if (size != 0)
-	{
-		VisibleKernel(&pixels[y * width + x], intersections, size);
-	}
-	else
-	{
-		if (i == 0)
+		if (size != 0)
 		{
-			pixels[y * width + x].x = 0;
-			pixels[y * width + x].y = 0;
-			pixels[y * width + x].z = 0;
+			//if (i == 0 && size<3)
+			//	printf("[%d]", size);
+			VisibleKernel(&pixels[y_im * width + x_im], intersections, 2*size);
 		}
+		else
+		{
+			if (i == 0)
+			{
+				pixels[y_im * width + x_im].x = 0;
+				pixels[y_im * width + x_im].y = 0;
+				pixels[y_im * width + x_im].z = 0;
+			}
+		}
+		__syncthreads();
 	}
 }
 
-void CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int width, int height, uchar4* dst)
+void CalculateImage(SceneData scene, TriangleFull* triangles, unsigned int size, int width, int height, uchar4* dst)
 {
 
-	Triangle *dev_triangles = 0;
+	TriangleFull *dev_triangles = 0;
 	TriangleTmpData *dev_t_data = 0;
 	cudaError_t cudaStatus;
+
+	float dir_n = calculate_norm(scene.direction);
+	float dirX_n = calculate_norm(scene.directionX);
+	float dirY_n = calculate_norm(scene.directionY);
 
 	// Choose which GPU to run on, change this on a multi-GPU system.
 	cudaStatus = cudaSetDevice(0);
@@ -450,7 +513,7 @@ void CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int
 	}
 
 	// Allocate GPU buffers for three vectors (two input, one output)    .
-	cudaStatus = cudaMalloc((void**)&dev_triangles, size * sizeof(Triangle));
+	cudaStatus = cudaMalloc((void**)&dev_triangles, size * sizeof(TriangleFull));
 
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMalloc failed!");
@@ -466,7 +529,7 @@ void CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int
 	}
 
 	// Copy input vectors from host memory to GPU buffers.
-	cudaStatus = cudaMemcpy(dev_triangles, triangles, size * sizeof(Triangle), cudaMemcpyHostToDevice);
+	cudaStatus = cudaMemcpy(dev_triangles, triangles, size * sizeof(TriangleFull), cudaMemcpyHostToDevice);
 
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "cudaMemcpy failed!");
@@ -493,14 +556,15 @@ void CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int
 		goto Error;
 	}
 	uint3 blocks;
-	blocks.x = width;
+	blocks.x = width / LINE_LEN + 1;
 	blocks.y = height;
 	blocks.z = 1;
 	uint3 threads;
 	threads.x = BlockSize1;
 	threads.y = 1;
 	threads.z = 1;
-	calculate_pixel << <blocks, threads >> > (dev_t_data, size, dst, width);
+
+	calculate_pixel <<<blocks, threads>>> (dev_t_data, size, dst, width, height, dirX_n,dirY_n, dir_n);
 
 	if (cudaStatus != cudaSuccess) {
 		fprintf(stderr, "addKernel launch failed: %s\n", cudaGetErrorString(cudaStatus));
@@ -515,7 +579,6 @@ void CalculateImage(SceneData scene, Triangle* triangles, unsigned int size, int
 		fprintf(stderr, "cudaDeviceSynchronize returned error code %d after launching caculate_pixel!\n", cudaStatus);
 		goto Error;
 	}
-
 Error:
 	cudaFree(dev_triangles);
 	cudaFree(dev_t_data);
