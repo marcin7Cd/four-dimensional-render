@@ -2,7 +2,7 @@
 experimental real time renderer (on GPU) of four dimensional objects written in c++ with cuda.
 
 # How 4D is displayed
-The 4D object is projected onto a 3D viewspaces and then its projected onto the screen (look at diagram bewlow). We have two two cameras one in 4D and one in 3D.
+The 4D object is projected onto a 3D viewspaces and then it's projected onto the screen (look at diagram below). We have two two cameras one in 4D and one in 3D.
 
 ![projection explanation](https://github.com/marcin7Cd/four-dimensional-render/assets/34893204/ba7dda40-f0d7-4401-ae7e-406a7e82f117)
 
@@ -30,14 +30,14 @@ Then you write each face. The format of the face is as follows:
 
 The first line is the number of triangles the face is decomposed into.
 
-Each next line specifies the triangle. You write indices of each vertex of the triangle (numeration based on the list of vertices at the beggining and starts with 0). And at the end you write 0-1 sequence specifing, which edges should be drawn. Edges are considered in the order 0-1 then 0-2 then 1-2. So for example 
+Each next line specifies the triangle. You write indices of each vertex of the triangle (numeration based on the list of vertices at the beggining and starts at 0). And at the end you write 0-1 sequence specifing, which edges should be drawn. Edges are considered in the order 1-2 then 1-3 then 2-3. So for example 
 
 2 4 6 011
 
 means the the triangle has vertices 2, 4 and 6, and the edges 2-6 and 4-6 are drawn.
 
 # Idea behind the rendering
-Instead of calculating projection onto 3D viewspace and then onto screen. I combine them. From each pixel on the screen I draw a "ray" plane that passes through 3 points: the pixel on the screen, the position of the 3d camera, and the position of the 4d camera. Then I draw on this plane the ordinary ray from 3D camera through the pixel on the screen. Then I caluclate all intersections with objects (the are 2D shapes on this plane) and decide, what part will be hit by the ordinary ray, when the object were to be projected onto the 3D space (it works, because this projection will be on this ray thanks to the choice of the ray plane).
+Instead of calculating projection onto 3D viewspace and then onto screen. I combine them. From each pixel on the screen I draw a "ray" plane that passes through 3 points: the pixel on the screen, the position of the 3d camera, and the position of the 4d camera. Then I draw on this plane the ordinary ray from 3D camera through the pixel on the screen. Then I caluclate all intersections with objects (they are 2D shapes on this plane) and decide, what part was hit by the ordinary ray, when it was projected onto the 3D space (it works, because this projection will be on the ordinary ray thanks to the choice of the ray plane).
 
 ![ray plane explanation](https://github.com/marcin7Cd/four-dimensional-render/assets/34893204/df28a46e-23d1-4583-a06f-9240d1303471)
 
